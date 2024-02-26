@@ -1,13 +1,20 @@
 package main
 
 import (
+	"crypto/sha256"
+	"crypto/sha512"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/IBM/sarama"
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/gofrs/uuid"
+	_ "github.com/lib/pq"
+	"github.com/xdg-go/scram"
 )
 
 const startupMessage = `[38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;54;48;5;39m [38;5;54;48;5;39m [38;5;54;48;5;39m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [0m
@@ -102,6 +109,71 @@ func main() {
 		fmt.Fprint(w, requestID.String())
 	})
 
+	http.HandleFunc("/pg-test", func(w http.ResponseWriter, r *http.Request) {
+		logRequest(r)
+		db, err := sql.Open("postgres", os.Getenv("POSTGRES_DATABASE_URL"))
+		if err != nil {
+			fmt.Fprint(w, err)
+			return
+		}
+		defer db.Close()
+		var result string
+		err = db.QueryRow("SELECT 1").Scan(&result)
+		if err != nil {
+			fmt.Fprint(w, err)
+			return
+		}
+		fmt.Fprint(w, result)
+	})
+
+	http.HandleFunc("/mysql-test", func(w http.ResponseWriter, r *http.Request) {
+		logRequest(r)
+		db, err := sql.Open("mysql", os.Getenv("MYSQL_DATABASE_URL"))
+		if err != nil {
+			fmt.Fprint(w, err)
+			return
+		}
+		defer db.Close()
+		var result string
+		err = db.QueryRow("SELECT 1").Scan(&result)
+		if err != nil {
+			fmt.Fprint(w, err)
+			return
+		}
+		fmt.Fprint(w, result)
+	})
+
+	http.HandleFunc("/kafka-test", func(w http.ResponseWriter, r *http.Request) {
+		logRequest(r)
+		broker := os.Getenv("KAFKA_BROKER")
+		topic := os.Getenv("KAFKA_TOPIC")
+		username := os.Getenv("KAFKA_USERNAME")
+		password := os.Getenv("KAFKA_PASSWORD")
+		conf := &sarama.Config{}
+		conf.Net.SASL.Enable = true
+		conf.Net.SASL.User = username
+		conf.Net.SASL.Password = password
+		conf.Net.SASL.Handshake = true
+		conf.Net.SASL.SCRAMClientGeneratorFunc = func() sarama.SCRAMClient { return &XDGSCRAMClient{HashGeneratorFcn: SHA512} }
+		conf.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA512
+		producer, err := sarama.NewSyncProducer([]string{broker}, conf)
+		if err != nil {
+			fmt.Fprint(w, err)
+			return
+		}
+		defer producer.Close()
+		msg := &sarama.ProducerMessage{
+			Topic: topic,
+			Value: sarama.StringEncoder("hello"),
+		}
+		partition, offset, err := producer.SendMessage(msg)
+		if err != nil {
+			fmt.Fprint(w, err)
+			return
+		}
+		fmt.Fprintf(w, "Message is stored in topic(%s)/partition(%d)/offset(%d)\n", topic, partition, offset)
+	})
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "80"
@@ -131,4 +203,33 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+}
+
+var (
+	SHA256 scram.HashGeneratorFcn = sha256.New
+	SHA512 scram.HashGeneratorFcn = sha512.New
+)
+
+type XDGSCRAMClient struct {
+	*scram.Client
+	*scram.ClientConversation
+	scram.HashGeneratorFcn
+}
+
+func (x *XDGSCRAMClient) Begin(userName, password, authzID string) (err error) {
+	x.Client, err = x.HashGeneratorFcn.NewClient(userName, password, authzID)
+	if err != nil {
+		return err
+	}
+	x.ClientConversation = x.Client.NewConversation()
+	return nil
+}
+
+func (x *XDGSCRAMClient) Step(challenge string) (response string, err error) {
+	response, err = x.ClientConversation.Step(challenge)
+	return
+}
+
+func (x *XDGSCRAMClient) Done() bool {
+	return x.ClientConversation.Done()
 }
