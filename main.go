@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/tls"
 	"database/sql"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -38,7 +41,7 @@ const startupMessage = `[38;5;1;48;5;16m [38;5;1;48;5;16m [38;5;1;48;5;16m [
 func logRequest(r *http.Request) {
 	uri := r.RequestURI
 	method := r.Method
-	fmt.Println("Got request!", method, uri)
+	log.Println("Got request!", method, uri)
 }
 
 func main() {
@@ -87,6 +90,9 @@ func main() {
 
 	http.HandleFunc("/env", func(w http.ResponseWriter, r *http.Request) {
 		logRequest(r)
+		if r.Method != "POST" {
+			return
+		}
 		keys, ok := r.URL.Query()["key"]
 		if ok && len(keys) > 0 {
 			fmt.Fprint(w, os.Getenv(keys[0]))
@@ -160,14 +166,28 @@ func main() {
 		topic := os.Getenv("KAFKA_TOPIC")
 		username := os.Getenv("KAFKA_USERNAME")
 		password := os.Getenv("KAFKA_PASSWORD")
-		conf := &sarama.Config{}
+		conf := sarama.NewConfig()
+		conf.Metadata.Full = true
+		conf.ClientID = "test-client"
+		// conf.Version = sarama.V3_6_0_0
+		conf.Producer.Return.Successes = true
+
 		conf.Net.SASL.Enable = true
 		conf.Net.SASL.User = username
 		conf.Net.SASL.Password = password
 		conf.Net.SASL.Handshake = true
-		conf.Net.SASL.SCRAMClientGeneratorFunc = func() sarama.SCRAMClient { return &XDGSCRAMClient{HashGeneratorFcn: SHA512} }
-		conf.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA512
-		producer, err := sarama.NewSyncProducer([]string{broker}, conf)
+		conf.Net.SASL.Mechanism = sarama.SASLTypePlaintext
+
+		// caCertPool := x509.NewCertPool()
+		tlsConfig := &tls.Config{
+			// RootCAs: caCertPool,
+			InsecureSkipVerify: true,
+		}
+		conf.Net.TLS.Enable = true
+		conf.Net.TLS.Config = tlsConfig
+
+		brokers := []string{broker}
+		producer, err := sarama.NewSyncProducer(brokers, conf)
 		if err != nil {
 			fmt.Fprint(w, err)
 			return
@@ -208,12 +228,72 @@ func main() {
 		fmt.Println(line)
 	}
 	fmt.Println()
-	fmt.Printf("==> Server listening at %s 🚀\n", bindAddr)
 
-	err := http.ListenAndServe(fmt.Sprintf(":%s", port), nil)
-	if err != nil {
+	go func() {
+		if err := runConsumer(); err != nil {
+			log.Println(err)
+		}
+	}()
+
+	fmt.Printf("==> Server listening at %s 🚀\n", bindAddr)
+	if err := http.ListenAndServe(fmt.Sprintf(":%s", port), nil); err != nil {
 		panic(err)
 	}
+}
+
+func runConsumer() error {
+	broker := os.Getenv("KAFKA_BROKER")
+	topic := os.Getenv("KAFKA_TOPIC")
+	username := os.Getenv("KAFKA_USERNAME")
+	password := os.Getenv("KAFKA_PASSWORD")
+	// init config, enable errors and notifications
+	config := sarama.NewConfig()
+	config.Metadata.Full = true
+	config.ClientID = "{CLIENT_ID}"
+	config.Producer.Return.Successes = true
+
+	// Kafka SASL configuration
+	config.Net.SASL.Enable = true
+	config.Net.SASL.User = username
+	config.Net.SASL.Password = password
+	config.Net.SASL.Handshake = true
+	config.Net.SASL.Mechanism = sarama.SASLTypePlaintext
+
+	// TLS configuration
+	// caCertPool := x509.NewCertPool()
+	tlsConfig := &tls.Config{
+		// RootCAs: caCertPool,
+		InsecureSkipVerify: true,
+	}
+	config.Net.TLS.Enable = true
+	config.Net.TLS.Config = tlsConfig
+
+	brokers := []string{broker}
+	consumer, err := sarama.NewConsumerGroup(brokers, "test-group", config)
+	if err != nil {
+		return err
+	}
+	defer consumer.Close()
+	kafkaConsumer := &KafkaConsumer{}
+	err = consumer.Consume(context.Background(), []string{topic}, kafkaConsumer)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+type KafkaConsumer struct{}
+
+func (consumer *KafkaConsumer) Setup(sarama.ConsumerGroupSession) error { return nil }
+
+func (consumer *KafkaConsumer) Cleanup(sarama.ConsumerGroupSession) error { return nil }
+
+func (consumer *KafkaConsumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+	for message := range claim.Messages() {
+		log.Printf("Message claimed: value = %s, timestamp = %v, topic = %s, partition = %d, offset = %d\n", string(message.Value), message.Timestamp, message.Topic, message.Partition, message.Offset)
+		session.MarkMessage(message, "")
+	}
+	return nil
 }
 
 var (
