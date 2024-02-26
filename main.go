@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -128,7 +129,17 @@ func main() {
 
 	http.HandleFunc("/mysql-test", func(w http.ResponseWriter, r *http.Request) {
 		logRequest(r)
-		db, err := sql.Open("mysql", os.Getenv("MYSQL_DATABASE_URL"))
+		us := os.Getenv("MYSQL_DATABASE_URL")
+		u, err := url.Parse(us)
+		if err != nil {
+			fmt.Fprint(w, err)
+			return
+		}
+		us = fmt.Sprintf("%s@tcp(%s)/%s", u.User.String(), u.Host, strings.TrimLeft(u.Path, "/"))
+		db, err := sql.Open(
+			"mysql",
+			us,
+		)
 		if err != nil {
 			fmt.Fprint(w, err)
 			return
