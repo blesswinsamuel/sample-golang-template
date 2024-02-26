@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"fmt"
 	"log"
@@ -178,10 +179,11 @@ func main() {
 		conf.Net.SASL.Handshake = true
 		conf.Net.SASL.Mechanism = sarama.SASLTypePlaintext
 
-		// caCertPool := x509.NewCertPool()
+		// https://docs.digitalocean.com/products/databases/kafka/how-to/connect/
+		caCertPool := x509.NewCertPool()
+		caCertPool.AppendCertsFromPEM([]byte(os.Getenv("KAFKA_CA_CERT")))
 		tlsConfig := &tls.Config{
-			// RootCAs: caCertPool,
-			InsecureSkipVerify: true,
+			RootCAs: caCertPool,
 		}
 		conf.Net.TLS.Enable = true
 		conf.Net.TLS.Config = tlsConfig
@@ -249,7 +251,7 @@ func runConsumer() error {
 	// init config, enable errors and notifications
 	config := sarama.NewConfig()
 	config.Metadata.Full = true
-	config.ClientID = "{CLIENT_ID}"
+	config.ClientID = "test-client2"
 	config.Producer.Return.Successes = true
 
 	// Kafka SASL configuration
@@ -260,10 +262,11 @@ func runConsumer() error {
 	config.Net.SASL.Mechanism = sarama.SASLTypePlaintext
 
 	// TLS configuration
-	// caCertPool := x509.NewCertPool()
+	// https://docs.digitalocean.com/products/databases/kafka/how-to/connect/
+	caCertPool := x509.NewCertPool()
+	caCertPool.AppendCertsFromPEM([]byte(os.Getenv("KAFKA_CA_CERT")))
 	tlsConfig := &tls.Config{
-		// RootCAs: caCertPool,
-		InsecureSkipVerify: true,
+		RootCAs: caCertPool,
 	}
 	config.Net.TLS.Enable = true
 	config.Net.TLS.Config = tlsConfig
