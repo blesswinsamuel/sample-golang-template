@@ -14,10 +14,12 @@ import (
 )
 
 func main() {
+	log.Println("Starting consumer")
 	err := runConsumer()
 	if err != nil {
 		log.Fatalf("Error consuming messages: %v", err)
 	}
+	<-make(chan struct{})
 }
 
 func runConsumer() error {
