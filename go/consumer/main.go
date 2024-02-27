@@ -14,12 +14,10 @@ import (
 )
 
 func main() {
-	go func() {
-		err := runConsumer()
-		if err != nil {
-			log.Fatalf("Error consuming messages: %v", err)
-		}
-	}()
+	err := runConsumer()
+	if err != nil {
+		log.Fatalf("Error consuming messages: %v", err)
+	}
 }
 
 func runConsumer() error {
