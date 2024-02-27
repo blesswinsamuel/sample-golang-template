@@ -8,12 +8,15 @@ import (
 	"crypto/x509"
 	"log"
 	"os"
+	"time"
 
 	"github.com/IBM/sarama"
 	"github.com/xdg-go/scram"
 )
 
 func main() {
+	log.Println("Starting consumer")
+	time.Sleep(7 * 24 * time.Hour)
 	err := runConsumer()
 	if err != nil {
 		log.Fatalf("Error consuming messages: %v", err)
